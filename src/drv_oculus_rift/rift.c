@@ -570,6 +570,25 @@ static void check_haptics_state(rift_hmd_t *hmd, uint64_t ts, rift_touch_control
 				rift_touch_cancel_in_progress(&hmd->radio, touch->device_num);
 				touch->haptic_state.in_progress = false;
 			}
+
+			if (ret == 0) {
+				touch->haptic_state.log_sent++;
+				touch->haptic_state.log_last_amplitude = amplitude;
+			} else if (ret == -EINPROGRESS || ret == -EBUSY) {
+				touch->haptic_state.log_waits++;
+			} else {
+				touch->haptic_state.log_failed++;
+				touch->haptic_state.log_last_err = ret;
+			}
+		}
+
+		if ((touch->haptic_state.log_sent || touch->haptic_state.log_failed || touch->haptic_state.log_waits) &&
+		    ts - touch->haptic_state.log_time >= ohmd_monotonic_per_sec(hmd->ctx)) {
+			LOGI("Touch %d haptics: %u sent (last amplitude %u), %u failed (last error %d), %u in-flight polls",
+			     touch->device_num, touch->haptic_state.log_sent, touch->haptic_state.log_last_amplitude,
+			     touch->haptic_state.log_failed, touch->haptic_state.log_last_err, touch->haptic_state.log_waits);
+			touch->haptic_state.log_sent = touch->haptic_state.log_failed = touch->haptic_state.log_waits = 0;
+			touch->haptic_state.log_time = ts;
 		}
 }
 

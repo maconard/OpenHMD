@@ -244,6 +244,11 @@ typedef struct {
 
 	float duration; /* Target duration in seconds */
 	uint64_t end_time; /* End timeout for any active pulse */
+
+	unsigned log_sent, log_failed, log_waits;
+	int log_last_err;
+	uint8_t log_last_amplitude;
+	uint64_t log_time;
 } rift_haptic_state;
 
 struct rift_touch_controller_s {
