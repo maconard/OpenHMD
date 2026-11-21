@@ -53,10 +53,28 @@ uint64_t ohmd_monotonic_get(ohmd_context* ctx)
 	return ohmd_monotonic_conv(now.QuadPart, qpc_freq.QuadPart, NUM_1_000_000_000);
 }
 
-// TODO higher resolution
+#ifndef CREATE_WAITABLE_TIMER_HIGH_RESOLUTION
+#define CREATE_WAITABLE_TIMER_HIGH_RESOLUTION 0x00000002
+#endif
+
+/* Sleep() rounds up to the 15.6 ms system tick unless the process raised the timer resolution,
+ * which starves the 1 kHz update thread; a high resolution timer per thread does not. */
 OHMD_APIENTRYDLL void OHMD_APIENTRY ohmd_sleep(double seconds)
 {
-	Sleep((DWORD)(seconds * 1000));
+	static __declspec(thread) HANDLE timer;
+	LARGE_INTEGER due;
+
+	if (!timer) {
+		timer = CreateWaitableTimerExW(NULL, NULL, CREATE_WAITABLE_TIMER_HIGH_RESOLUTION, TIMER_ALL_ACCESS);
+		if (!timer)
+			timer = INVALID_HANDLE_VALUE;
+	}
+	due.QuadPart = -(LONGLONG)(seconds * 10000000.0);
+	if (timer == INVALID_HANDLE_VALUE || due.QuadPart >= 0 || !SetWaitableTimer(timer, &due, 0, NULL, NULL, FALSE)) {
+		Sleep((DWORD)(seconds * 1000));
+		return;
+	}
+	WaitForSingleObject(timer, INFINITE);
 }
 
 // threads
