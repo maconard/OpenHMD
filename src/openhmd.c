@@ -680,6 +680,16 @@ uint64_t ohmd_monotonic_conv(uint64_t ticks, uint64_t srcTicksPerSecond, uint64_
 		ticks % srcTicksPerSecond * dstTicksPerSecond / srcTicksPerSecond;
 }
 
+int ohmd_debug_enabled(void)
+{
+	static int enabled = -1;
+	if (enabled < 0) {
+		const char *env = getenv("OHMD_DEBUG");
+		enabled = env != NULL && env[0] != 0 && strcmp(env, "0") != 0;
+	}
+	return enabled;
+}
+
 void ohmd_get_version(int* out_major, int* out_minor, int* out_patch)
 {
 	*out_major = OHMD_VERSION_MAJOR;

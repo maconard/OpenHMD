@@ -26,6 +26,10 @@ void* ohmd_allocfn(ohmd_context* ctx, const char* e_msg, size_t size);
 #define LOGD(...)
 #endif
 
+/* Per-frame tracker diagnostics, printed only when OHMD_DEBUG is set to a non-zero value */
+int ohmd_debug_enabled(void);
+#define LOGDBG(...) do{ if(ohmd_debug_enabled()){ printf("[DD] "); printf(__VA_ARGS__); puts(""); } } while(0)
+
 #define LOGV(...) LOG(1, "VV", __VA_ARGS__)
 #define LOGI(...) LOG(2, "II", __VA_ARGS__)
 #define LOGW(...) LOG(3, "WW", __VA_ARGS__)
