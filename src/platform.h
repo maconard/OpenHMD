@@ -44,4 +44,25 @@ int ohmd_write_file(const char* filename, char *buf, unsigned long buf_len);
 
 int findEndPoint(char* path, int endpoint);
 
+#ifdef _MSC_VER
+/* glibc qsort_r on top of qsort_s, which takes the context first */
+#include <stdlib.h>
+struct ohmd_qsort_r_ctx {
+	int (*cmp)(const void *, const void *, void *);
+	void *arg;
+};
+static __inline int __cdecl ohmd_qsort_r_cmp(void *ctx, const void *a, const void *b)
+{
+	struct ohmd_qsort_r_ctx *c = (struct ohmd_qsort_r_ctx *)ctx;
+	return c->cmp(a, b, c->arg);
+}
+static __inline void ohmd_qsort_r(void *base, size_t n, size_t size,
+	int (*cmp)(const void *, const void *, void *), void *arg)
+{
+	struct ohmd_qsort_r_ctx c = { cmp, arg };
+	qsort_s(base, n, size, ohmd_qsort_r_cmp, &c);
+}
+#define qsort_r ohmd_qsort_r
+#endif
+
 #endif
