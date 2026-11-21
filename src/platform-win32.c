@@ -14,6 +14,10 @@
 #define WIN32_EXTRA_LEAN
 
 #include <windows.h>
+#include <errno.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "platform.h"
 #include "openhmdi.h"
@@ -31,19 +35,22 @@ double ohmd_get_tick()
 	return (high * 4294967296.0 + low) / 10000000;
 }
 
-static const uint64_t NUM_10_000_000 = 10000000;
+static const uint64_t NUM_1_000_000_000 = 1000000000;
+static LARGE_INTEGER qpc_freq;
 
 void ohmd_monotonic_init(ohmd_context* ctx)
 {
-	ctx->monotonic_ticks_per_sec = NUM_10_000_000;
+	QueryPerformanceFrequency(&qpc_freq);
+	ctx->monotonic_ticks_per_sec = NUM_1_000_000_000;
 }
 
+/* Nanoseconds, like CLOCK_MONOTONIC on POSIX; the Rift tracker assumes that unit. */
 uint64_t ohmd_monotonic_get(ohmd_context* ctx)
 {
-	FILETIME filetime;
-	GetSystemTimeAsFileTime(&filetime);
+	LARGE_INTEGER now;
+	QueryPerformanceCounter(&now);
 
-	return ((uint64_t)filetime.dwHighDateTime << 32) | filetime.dwLowDateTime;
+	return ohmd_monotonic_conv(now.QuadPart, qpc_freq.QuadPart, NUM_1_000_000_000);
 }
 
 // TODO higher resolution
@@ -132,6 +139,7 @@ ohmd_cond* ohmd_create_cond(ohmd_context* ctx)
 		return NULL;
 	
 	InitializeConditionVariable (&cond->cond);
+	return cond;
 }
 
 void ohmd_destroy_cond(ohmd_cond* cond)
@@ -169,6 +177,90 @@ int findEndPoint(char* path, int endpoint)
 	}
 
 	return 0;
+}
+
+int ohmd_read_file(const char* filename, char **out_buf, unsigned long *out_len)
+{
+	FILE* f = fopen(filename, "rb");
+	long file_len;
+	char *buffer;
+
+	if (f == NULL)
+		return errno;
+
+	if (fseek(f, 0, SEEK_END) != 0 || (file_len = ftell(f)) < 0 || fseek(f, 0, SEEK_SET) != 0) {
+		fclose(f);
+		return EIO;
+	}
+
+	buffer = malloc(file_len + 1);
+	if (buffer == NULL || fread(buffer, 1, file_len, f) != (size_t)file_len) {
+		free(buffer);
+		fclose(f);
+		return EIO;
+	}
+	buffer[file_len] = 0;
+	fclose(f);
+
+	*out_buf = buffer;
+	*out_len = (unsigned long) file_len;
+	return 0;
+}
+
+int ohmd_ensure_path(const char* pathname)
+{
+	char pathbuf[OHMD_STR_SIZE+1];
+	char *cur;
+	DWORD attr;
+
+	strncpy(pathbuf, pathname, OHMD_STR_SIZE);
+	pathbuf[OHMD_STR_SIZE] = 0;
+
+	for (cur = pathbuf + 1;; cur++) {
+		char c = *cur;
+		if (c != '/' && c != '\\' && c != 0)
+			continue;
+		*cur = 0;
+		attr = GetFileAttributesA(pathbuf);
+		if (attr == INVALID_FILE_ATTRIBUTES) {
+			if (!CreateDirectoryA(pathbuf, NULL) && GetLastError() != ERROR_ALREADY_EXISTS)
+				return EACCES;
+		} else if (!(attr & FILE_ATTRIBUTE_DIRECTORY)) {
+			return ENOTDIR;
+		}
+		*cur = c;
+		if (c == 0)
+			return 0;
+	}
+}
+
+int ohmd_write_file(const char* filename, char *buf, unsigned long buf_len)
+{
+	FILE* f = fopen(filename, "wb");
+
+	if (f == NULL)
+		return errno;
+
+	if (fwrite(buf, 1, buf_len, f) != buf_len) {
+		fclose(f);
+		return EIO;
+	}
+
+	return fclose(f);
+}
+
+const char *ohmd_get_config_dir(ohmd_context *ctx)
+{
+	const char *env;
+
+	if (ctx->config_dir[0] != 0)
+		return ctx->config_dir;
+
+	env = getenv("LOCALAPPDATA");
+	if (env == NULL)
+		env = getenv("TEMP");
+	snprintf(ctx->config_dir, OHMD_STR_SIZE, "%s\\openhmd", env ? env : ".");
+	return ctx->config_dir;
 }
 
 /// Handling ovr service
