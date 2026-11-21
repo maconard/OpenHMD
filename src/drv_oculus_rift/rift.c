@@ -545,16 +545,17 @@ static void check_haptics_state(rift_hmd_t *hmd, uint64_t ts, rift_touch_control
 			if (touch->haptic_state.haptics_on)
 				amplitude = touch->haptic_state.amplitude;
 
-			if (touch->haptic_state.dirty && touch->haptic_state.in_progress)
-				rift_touch_cancel_in_progress(&hmd->radio, touch->device_num);
-			touch->haptic_state.dirty = false;
+			/* A write in flight finishes first: cancelling it leaves its result pending, so the next
+			 * write would complete on that result without sending its own state. */
+			if (!touch->haptic_state.in_progress)
+				touch->haptic_state.dirty = false;
 
 			ret = rift_touch_send_haptics(&hmd->radio, touch->device_num, touch->haptic_state.low_freq, amplitude);
 			if (ret == 0) {
 				/* Radio message was successfully sent, calculate the end time */
 				LOGD("Haptics sent, dev %d %s freq amplitude %u\n", touch->device_num, touch->haptic_state.low_freq ? "low" : "high", amplitude);
 				touch->haptic_state.in_progress = false;
-				if (touch->haptic_state.haptics_on) {
+				if (touch->haptic_state.haptics_on && !touch->haptic_state.dirty) {
 					float duration = touch->haptic_state.duration;
 					touch->haptic_state.end_time = ts + roundf(duration * ohmd_monotonic_per_sec(hmd->ctx));
 				}
