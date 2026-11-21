@@ -56,9 +56,38 @@ option(OPENHMD_DRIVER_ANDROID "General Android driver" OFF)
 option(OPENHMD_EXAMPLE_SIMPLE "Simple test binary" ON)
 option(OPENHMD_EXAMPLE_SDL "SDL OpenGL test (outdated)" OFF)
 
+option(OPENHMD_RIFT_PIPEWIRE "PipeWire debug video and metadata streams for the Rift tracker" OFF)
+
 if(OPENHMD_DRIVER_OCULUS_RIFT)
-  pkg_check_modules(libusb-1.0 REQUIRED libusb-1.0)
+  if(PKG_CONFIG_FOUND)
+    pkg_check_modules(libusb-1.0 libusb-1.0)
+  endif()
+  if(NOT libusb-1.0_FOUND)
+    find_path(libusb-1.0_INCLUDE_DIRS libusb.h PATH_SUFFIXES libusb-1.0)
+    find_library(libusb-1.0_LIBRARIES NAMES usb-1.0 libusb-1.0)
+    if(NOT libusb-1.0_INCLUDE_DIRS OR NOT libusb-1.0_LIBRARIES)
+      message(FATAL_ERROR "libusb-1.0 not found")
+    endif()
+  endif()
   find_package( OpenCV REQUIRED )
+
+  find_package(JPEG)
+  if(JPEG_FOUND)
+    set(openhmd_source_files ${openhmd_source_files} ${CMAKE_CURRENT_LIST_DIR}/src/drv_oculus_rift/ohmd-jpeg.c)
+    add_definitions(-DHAVE_LIBJPEG=1)
+    include_directories(${JPEG_INCLUDE_DIRS})
+    set(LIBS ${LIBS} ${JPEG_LIBRARIES})
+  endif()
+
+  if(OPENHMD_RIFT_PIPEWIRE)
+    pkg_check_modules(pipewire REQUIRED libpipewire-0.3 libspa-0.2)
+    set(openhmd_source_files ${openhmd_source_files}
+      ${CMAKE_CURRENT_LIST_DIR}/src/drv_oculus_rift/ohmd-pipewire.c
+      ${CMAKE_CURRENT_LIST_DIR}/src/drv_oculus_rift/rift-debug-draw.c)
+    add_definitions(-DHAVE_PIPEWIRE=1 -DHAVE_DEBUG_STREAM=1)
+    include_directories(${pipewire_INCLUDE_DIRS})
+    set(LIBS ${LIBS} ${pipewire_LIBRARIES})
+  endif()
 
 	set(openhmd_source_files ${openhmd_source_files}
 	${CMAKE_CURRENT_LIST_DIR}/src/drv_oculus_rift/correspondence_search.c
