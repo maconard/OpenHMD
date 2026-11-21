@@ -39,4 +39,9 @@ void rift_tracker_update_sensor_pose(rift_tracker_ctx *tracker_ctx, rift_sensor_
 void rift_tracker_get_sensor_status(rift_tracker_ctx *ctx, ohmd_rift_sensor_status *out);
 bool rift_tracked_device_get_tracking_state(rift_tracked_device *dev_base, uint64_t *device_time_ns);
 
+/* Room offsets as x, y, z (m) and yaw (radians). Setting saves the offset for the next start;
+ * the tracker keeps using the applied one until then. */
+void rift_tracker_get_room_offset(rift_tracker_ctx *tracker_ctx, float applied[4], float stored[4]);
+bool rift_tracker_set_room_offset(rift_tracker_ctx *tracker_ctx, const float stored[4]);
+
 #endif

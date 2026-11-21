@@ -683,6 +683,8 @@ uint64_t ohmd_monotonic_conv(uint64_t ticks, uint64_t srcTicksPerSecond, uint64_
 #if DRIVER_OCULUS_RIFT
 int rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out);
 int rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out);
+int rift_get_room_offset(ohmd_device* device, float applied[4], float stored[4]);
+int rift_set_room_offset(ohmd_device* device, const float stored[4]);
 #endif
 
 int OHMD_APIENTRY ohmd_rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out)
@@ -700,6 +702,24 @@ int OHMD_APIENTRY ohmd_rift_get_sensor_status(ohmd_device* device, ohmd_rift_sen
 	memset(out, 0, sizeof(*out));
 #if DRIVER_OCULUS_RIFT
 	return rift_get_sensor_status(device, out);
+#else
+	return -1;
+#endif
+}
+
+int OHMD_APIENTRY ohmd_rift_get_room_offset(ohmd_device* device, float applied[4], float stored[4])
+{
+#if DRIVER_OCULUS_RIFT
+	return rift_get_room_offset(device, applied, stored);
+#else
+	return -1;
+#endif
+}
+
+int OHMD_APIENTRY ohmd_rift_set_room_offset(ohmd_device* device, const float stored[4])
+{
+#if DRIVER_OCULUS_RIFT
+	return rift_set_room_offset(device, stored);
 #else
 	return -1;
 #endif

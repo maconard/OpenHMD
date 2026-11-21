@@ -228,6 +228,14 @@ static void handle_tracker_sensor_msg(rift_hmd_t* priv, uint64_t local_ts, unsig
 
 	dump_packet_tracker_sensor(s);
 
+	/* The CV1 sends the proximity sensor and the lens spacing (IAD slider) ADC in place of the
+	 * magnetometer; the ADC to mm mapping is Monado's (drivers/rift), it spans the slider's 58 to 72 mm. */
+	if (priv->revision == REV_CV1 && s->mag[1] != 0) {
+		float iad_mm = roundf(((s->mag[1] & 0xffff) - 400) / 300.0f * 2.0f + 59.0f * 2.0f) / 2.0f;
+		if (iad_mm >= 55.0f && iad_mm <= 75.0f)
+			priv->hmd_dev.base.properties.ipd = iad_mm / 1000.0f;
+	}
+
 	int32_t mag32[] = { s->mag[0], s->mag[1], s->mag[2] };
 	vec3f_from_rift_vec(mag32, &raw_mag);
 
@@ -852,6 +860,25 @@ int rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out)
 	return 0;
 }
 
+int rift_get_room_offset(ohmd_device* device, float applied[4], float stored[4])
+{
+	rift_device_priv* dev_priv = rift_device_priv_get(device);
+
+	if (device->getf != getf || !dev_priv->hmd->tracker_ctx)
+		return -1;
+	rift_tracker_get_room_offset(dev_priv->hmd->tracker_ctx, applied, stored);
+	return 0;
+}
+
+int rift_set_room_offset(ohmd_device* device, const float stored[4])
+{
+	rift_device_priv* dev_priv = rift_device_priv_get(device);
+
+	if (device->getf != getf || !dev_priv->hmd->tracker_ctx)
+		return -1;
+	return rift_tracker_set_room_offset(dev_priv->hmd->tracker_ctx, stored) ? 0 : -1;
+}
+
 static int set_touch_haptics(ohmd_device *device, bool enable, float duration, float frequency, float amplitude)
 {
 	const float MIN_HAPTIC_DURATION = 0.01;
@@ -1294,6 +1321,7 @@ static rift_hmd_t *open_hmd(ohmd_driver* driver, ohmd_device_desc* desc)
 			ohmd_set_universal_distortion_k(&(hmd_dev->base.properties), 0.269, -0.25, 0.178, 0.803);
 			ohmd_set_universal_aberration_k(&(hmd_dev->base.properties), 0.9992107, 1.0, 1.0120361);
 			/* CV1 reports IPD, but not lens center, at least not anywhere I could find, so use the manually measured value of 0.054 */
+			hmd_dev->base.properties.ipd = priv->display_info.lens_separation;
 			priv->display_info.lens_separation = 0.054;
 			hmd_dev->base.properties.lens_sep = priv->display_info.lens_separation;
 		default:

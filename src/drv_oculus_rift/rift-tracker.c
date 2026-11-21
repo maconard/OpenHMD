@@ -12,6 +12,7 @@
 #include <string.h>
 #include <stdlib.h>
 #include <assert.h>
+#include <math.h>
 #include <inttypes.h>
 #include <stdarg.h>
 #include <time.h>
@@ -162,6 +163,8 @@ struct rift_tracker_ctx_s
 	rift_tracker_exposure_info exposure_history[NUM_EXPOSURE_HISTORY];
 
 	rift_tracker_config config;
+	/* Room offset in the sensor poses since start; config holds the one saved for the next start */
+	posef applied_room_offset;
 
 	rift_sensor_ctx *sensors[RIFT_MAX_SENSORS];
 	uint8_t n_sensors;
@@ -304,6 +307,7 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 	rift_tracker_config_init(&tracker_ctx->config);
 	rift_tracker_config_load(ohmd_ctx, &tracker_ctx->config);
 	rift_tracker_config_get_room_pose_offset(&tracker_ctx->config, &room_pose_offset);
+	tracker_ctx->applied_room_offset = room_pose_offset;
 
 	for (i = 0; i < RIFT_MAX_TRACKED_DEVICES; i++) {
 		rift_tracked_device_priv *dev = tracker_ctx->devices + i;
@@ -1224,7 +1228,7 @@ void rift_tracker_update_sensor_pose(rift_tracker_ctx *tracker_ctx, rift_sensor_
 	for (i = 0; i < tracker_ctx->n_sensors; i++)
 		attached[i] = rift_sensor_serial_no(tracker_ctx->sensors[i]);
 	/* Stored poses exclude the room offset, which is applied again at load */
-	rift_tracker_config_get_room_pose_offset(&tracker_ctx->config, &offset);
+	offset = tracker_ctx->applied_room_offset;
 	oposef_inverse(&offset);
 	oposef_apply(new_pose, &offset, &world_pose);
 	if (rift_tracker_config_set_sensor_pose(&tracker_ctx->config, serial_no, &world_pose, attached, tracker_ctx->n_sensors)) {
@@ -1246,4 +1250,48 @@ void rift_tracker_update_sensor_pose(rift_tracker_ctx *tracker_ctx, rift_sensor_
 	}
 
 	ohmd_unlock_mutex (tracker_ctx->save_lock);
+}
+
+void rift_tracker_get_room_offset(rift_tracker_ctx *tracker_ctx, float applied[4], float stored[4])
+{
+	quatf q;
+
+	ohmd_lock_mutex (tracker_ctx->tracker_lock);
+	q = tracker_ctx->applied_room_offset.orient;
+	applied[0] = tracker_ctx->applied_room_offset.pos.x;
+	applied[1] = tracker_ctx->applied_room_offset.pos.y;
+	applied[2] = tracker_ctx->applied_room_offset.pos.z;
+	/* a yaw about +y: (0, sin(yaw/2), 0, cos(yaw/2)) */
+	applied[3] = 2.0f * atan2f(q.y, q.w);
+	stored[0] = tracker_ctx->config.room_center_offset.x;
+	stored[1] = tracker_ctx->config.room_center_offset.y;
+	stored[2] = tracker_ctx->config.room_center_offset.z;
+	stored[3] = tracker_ctx->config.room_yaw_offset;
+	ohmd_unlock_mutex (tracker_ctx->tracker_lock);
+}
+
+bool rift_tracker_set_room_offset(rift_tracker_ctx *tracker_ctx, const float stored[4])
+{
+	rift_tracker_config snapshot;
+
+	ohmd_lock_mutex (tracker_ctx->save_lock);
+	ohmd_lock_mutex (tracker_ctx->tracker_lock);
+	tracker_ctx->config.room_center_offset.x = stored[0];
+	tracker_ctx->config.room_center_offset.y = stored[1];
+	tracker_ctx->config.room_center_offset.z = stored[2];
+	tracker_ctx->config.room_yaw_offset = stored[3];
+	tracker_ctx->config.modified = true;
+	snapshot = tracker_ctx->config;
+	tracker_ctx->config.modified = false;
+	ohmd_unlock_mutex (tracker_ctx->tracker_lock);
+
+	rift_tracker_config_save(tracker_ctx->ohmd_ctx, &snapshot);
+	if (snapshot.modified) {
+		ohmd_lock_mutex (tracker_ctx->tracker_lock);
+		tracker_ctx->config.modified = true;
+		ohmd_unlock_mutex (tracker_ctx->tracker_lock);
+	}
+	ohmd_unlock_mutex (tracker_ctx->save_lock);
+
+	return !snapshot.modified;
 }

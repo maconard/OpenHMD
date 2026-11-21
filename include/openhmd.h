@@ -561,6 +561,22 @@ OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_get_tracking_status(ohmd_device* de
  **/
 OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out);
 
+/**
+ * Get the room offset of the tracking space as x, y, z (m) and yaw (radians): the one applied since
+ * start, and the one stored in rift-room-config.json.
+ *
+ * @return 0 on success, -1 for devices without Rift tracking.
+ **/
+OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_get_room_offset(ohmd_device* device, float applied[4], float stored[4]);
+
+/**
+ * Store a room offset (x, y, z in m, yaw in radians) in rift-room-config.json. The tracker applies it
+ * at the next start; sensor poses saved meanwhile stay relative to the applied offset.
+ *
+ * @return 0 when saved, -1 otherwise.
+ **/
+OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_set_room_offset(ohmd_device* device, const float stored[4]);
+
 #ifdef __cplusplus
 }
 #endif
