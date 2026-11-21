@@ -24,7 +24,6 @@
 #include "rift-sensor.h"
 #include "rift-sensor-usb.h"
 
-#include "rift-sensor.h"
 #include "rift-sensor-maths.h"
 #include "rift-sensor-opencv.h"
 #include "rift-sensor-pose-helper.h"
@@ -153,6 +152,7 @@ struct rift_tracker_ctx_s
 	ohmd_context* ohmd_ctx;
 	libusb_context *usb_ctx;
 	ohmd_mutex *tracker_lock;
+	ohmd_mutex *save_lock;
 
 	ohmd_thread* usb_thread;
 	int usb_completed;
@@ -283,6 +283,7 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 	tracker_ctx = ohmd_alloc(ohmd_ctx, sizeof (rift_tracker_ctx));
 	tracker_ctx->ohmd_ctx = ohmd_ctx;
 	tracker_ctx->tracker_lock = ohmd_create_mutex(ohmd_ctx);
+	tracker_ctx->save_lock = ohmd_create_mutex(ohmd_ctx);
 
 	rift_tracker_config_init(&tracker_ctx->config);
 	rift_tracker_config_load(ohmd_ctx, &tracker_ctx->config);
@@ -590,6 +591,7 @@ rift_tracker_free (rift_tracker_ctx *tracker_ctx)
 		libusb_exit (tracker_ctx->usb_ctx);
 
 	ohmd_destroy_mutex (tracker_ctx->tracker_lock);
+	ohmd_destroy_mutex (tracker_ctx->save_lock);
 	free (tracker_ctx);
 }
 
@@ -1185,9 +1187,39 @@ bool rift_tracked_device_get_tracking_state(rift_tracked_device *dev_base, uint6
 void rift_tracker_update_sensor_pose(rift_tracker_ctx *tracker_ctx, rift_sensor_ctx *sensor, posef *new_pose)
 {
 	const char *serial_no = rift_sensor_serial_no(sensor);
+	const char *attached[RIFT_MAX_SENSORS];
+	rift_tracker_config snapshot;
+	posef offset, world_pose;
+	int i;
+
+	/* Called from a sensor analysis thread with no sensor or tracker lock held; save_lock
+	 * serialises the file write and is held for nothing else. */
+	ohmd_lock_mutex (tracker_ctx->save_lock);
 
 	ohmd_lock_mutex (tracker_ctx->tracker_lock);
-	rift_tracker_config_set_sensor_pose(&tracker_ctx->config, serial_no, new_pose);
-	rift_tracker_config_save(tracker_ctx->ohmd_ctx, &tracker_ctx->config);
+	for (i = 0; i < tracker_ctx->n_sensors; i++)
+		attached[i] = rift_sensor_serial_no(tracker_ctx->sensors[i]);
+	/* Stored poses exclude the room offset, which is applied again at load */
+	rift_tracker_config_get_room_pose_offset(&tracker_ctx->config, &offset);
+	oposef_inverse(&offset);
+	oposef_apply(new_pose, &offset, &world_pose);
+	if (rift_tracker_config_set_sensor_pose(&tracker_ctx->config, serial_no, &world_pose, attached, tracker_ctx->n_sensors)) {
+		snapshot = tracker_ctx->config;
+		tracker_ctx->config.modified = false;
+	} else {
+		LOGW("Room config is full of attached sensors, not saving the pose for sensor %s", serial_no);
+		snapshot.modified = false;
+	}
 	ohmd_unlock_mutex (tracker_ctx->tracker_lock);
+
+	if (snapshot.modified) {
+		rift_tracker_config_save(tracker_ctx->ohmd_ctx, &snapshot);
+		if (snapshot.modified) {
+			ohmd_lock_mutex (tracker_ctx->tracker_lock);
+			tracker_ctx->config.modified = true;
+			ohmd_unlock_mutex (tracker_ctx->tracker_lock);
+		}
+	}
+
+	ohmd_unlock_mutex (tracker_ctx->save_lock);
 }

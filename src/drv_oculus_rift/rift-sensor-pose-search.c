@@ -428,10 +428,11 @@ update_device_and_blobs (rift_pose_finder *pf, rift_sensor_analysis_frame *frame
 		 * fusion pose (object->world) to yield camera->world xform
 		 */
 		posef camera_object_pose = pose;
+		posef new_camera_pose;
 		oposef_inverse(&camera_object_pose);
 
 		posef *capture_pose = &exp_dev_info->capture_pose;
-		oposef_apply(&camera_object_pose, capture_pose, &pf->camera_pose);
+		oposef_apply(&camera_object_pose, capture_pose, &new_camera_pose);
 
 		LOGI("Set sensor %d pose from device %d - tracker pose quat %f %f %f %f  pos %f %f %f"
 				" fusion pose quat %f %f %f %f  pos %f %f %f gravity error %f degrees yielded"
@@ -440,17 +441,20 @@ update_device_and_blobs (rift_pose_finder *pf, rift_sensor_analysis_frame *frame
 			pose.orient.x, pose.orient.y, pose.orient.z, pose.orient.w, pose.pos.x, pose.pos.y, pose.pos.z,
 			capture_pose->orient.x, capture_pose->orient.y, capture_pose->orient.z, capture_pose->orient.w,
 			capture_pose->pos.x, capture_pose->pos.y, capture_pose->pos.z, RAD_TO_DEG(dev_state->gravity_error_rad),
-			pf->camera_pose.orient.x, pf->camera_pose.orient.y, pf->camera_pose.orient.z, pf->camera_pose.orient.w,
-			pf->camera_pose.pos.x, pf->camera_pose.pos.y, pf->camera_pose.pos.z);
+			new_camera_pose.orient.x, new_camera_pose.orient.y, new_camera_pose.orient.z, new_camera_pose.orient.w,
+			new_camera_pose.pos.x, new_camera_pose.pos.y, new_camera_pose.pos.z);
 
 		const vec3f gravity_vector = {{ 0.0, 1.0, 0.0 }};
 
-		quatf cam_orient = pf->camera_pose.orient;
+		quatf cam_orient = new_camera_pose.orient;
 		oquatf_inverse(&cam_orient);
-		oquatf_get_rotated(&cam_orient, &gravity_vector, &pf->cam_gravity_vector);
 
+		ohmd_lock_mutex (pf->pose_lock);
+		pf->camera_pose = new_camera_pose;
+		oquatf_get_rotated(&cam_orient, &gravity_vector, &pf->cam_gravity_vector);
 		pf->have_camera_pose = true;
 		pf->camera_pose_changed = true;
+		ohmd_unlock_mutex (pf->pose_lock);
 	}
 
 	if (!pf->have_camera_pose) {

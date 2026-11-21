@@ -24,6 +24,9 @@ struct rift_pose_finder {
 	int sensor_id;
 	rift_sensor_camera_params *calib;
 
+	/* Taken when camera_pose, have_camera_pose and camera_pose_changed are written (the sensor_lock of the owning sensor) */
+	ohmd_mutex *pose_lock;
+
 	/* Updated from fast_analysis_thread */
 	bool have_camera_pose;
 	bool camera_pose_changed;

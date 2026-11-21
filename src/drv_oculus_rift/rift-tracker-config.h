@@ -37,7 +37,8 @@ void rift_tracker_config_save(ohmd_context *ctx, rift_tracker_config *config);
 
 void rift_tracker_config_get_room_pose_offset(rift_tracker_config *config, posef *room_pose_offset);
 
-void rift_tracker_config_set_sensor_pose(rift_tracker_config *config, const char *serial_no, posef *pose);
+bool rift_tracker_config_set_sensor_pose(rift_tracker_config *config, const char *serial_no, posef *pose,
+	const char *const *attached, int n_attached);
 bool rift_tracker_config_get_sensor_pose(rift_tracker_config *config, const char *serial_no, posef *pose);
 
 #endif

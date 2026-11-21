@@ -128,7 +128,7 @@ rift_tracker_config_printf(char **dest_ptr, char *end, const char *fmt, ...)
 	va_start(args, fmt);
 	would_write = vsnprintf(dest, end-dest, fmt, args);
 	va_end(args);
-	if (would_write < 0)
+	if (would_write < 0 || would_write >= end-dest)
 		return false;
 
 	*dest_ptr += would_write;
@@ -203,10 +203,11 @@ rift_tracker_config_get_room_pose_offset(rift_tracker_config *config, posef *roo
 	oquatf_init_axis(&room_pose_offset->orient, &up, config->room_yaw_offset);
 }
 
-void
-rift_tracker_config_set_sensor_pose(rift_tracker_config *config, const char *serial_no, posef *pose)
+bool
+rift_tracker_config_set_sensor_pose(rift_tracker_config *config, const char *serial_no, posef *pose,
+	const char *const *attached, int n_attached)
 {
-	int i;
+	int i, j;
 	rift_tracker_sensor_config *sensor_cfg = NULL;
 
 	assert(config->n_sensors <= RIFT_MAX_SENSORS);
@@ -219,16 +220,27 @@ rift_tracker_config_set_sensor_pose(rift_tracker_config *config, const char *ser
 	}
 
 	if (sensor_cfg == NULL) {
-		assert(config->n_sensors < RIFT_MAX_SENSORS);
+		if (config->n_sensors < RIFT_MAX_SENSORS) {
+			sensor_cfg = config->sensors + config->n_sensors;
+			config->n_sensors++;
+		} else {
+			for (i = 0; i < config->n_sensors && sensor_cfg == NULL; i++) {
+				for (j = 0; j < n_attached; j++)
+					if (strcmp(config->sensors[i].serial_no, attached[j]) == 0)
+						break;
+				if (j == n_attached)
+					sensor_cfg = config->sensors + i;
+			}
+			if (sensor_cfg == NULL)
+				return false;
+		}
 
-		sensor_cfg = config->sensors + config->n_sensors;
-		config->n_sensors++;
-
-		strcpy(sensor_cfg->serial_no, serial_no);
+		snprintf(sensor_cfg->serial_no, sizeof(sensor_cfg->serial_no), "%s", serial_no);
 	}
 
 	sensor_cfg->pose = *pose;
 	config->modified = true;
+	return true;
 }
 
 bool

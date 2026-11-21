@@ -92,6 +92,9 @@ struct rift_sensor_ctx_s
 
 	bool long_analysis_busy;
 
+	bool pose_save_pending;
+	posef pose_save_pose;
+
 	/* End protected by sensor_lock */
 
 	ohmd_thread* fast_analysis_thread;
@@ -185,8 +188,10 @@ release_capture_frame(rift_sensor_ctx *sensor, rift_sensor_analysis_frame *frame
 			frame->vframe->start_ts, frame->exposure_info_valid ? &frame->exposure_info : NULL,
 			sensor->serial_no);
 
+	/* Saved by the long analysis thread outside the locks; this can run on the USB thread */
 	if (sensor->pf.camera_pose_changed) {
-		rift_tracker_update_sensor_pose(sensor->tracker, sensor, &sensor->pf.camera_pose);
+		sensor->pose_save_pose = sensor->pf.camera_pose;
+		sensor->pose_save_pending = true;
 		sensor->pf.camera_pose_changed = false;
 	}
 
@@ -334,6 +339,7 @@ rift_sensor_new(ohmd_context* ohmd_ctx, int id, const char *serial_no,
 	sensor_ctx->long_analysis_busy = false;
 
 	sensor_ctx->sensor_lock = ohmd_create_mutex(ohmd_ctx);
+	sensor_ctx->pf.pose_lock = sensor_ctx->sensor_lock;
 
 	/* Initialise frame queues */
 	INIT_QUEUE(&sensor_ctx->capture_frame_q);
@@ -486,6 +492,14 @@ static unsigned int long_analysis_thread(void *arg)
 				/* Done with this frame - send it back to the capture thread */
 				release_capture_frame(ctx, frame);
 				frame = NULL;
+
+				while (ctx->pose_save_pending && !ctx->shutdown) {
+					posef save_pose = ctx->pose_save_pose;
+					ctx->pose_save_pending = false;
+					ohmd_unlock_mutex (ctx->sensor_lock);
+					rift_tracker_update_sensor_pose(ctx->tracker, ctx, &save_pose);
+					ohmd_lock_mutex (ctx->sensor_lock);
+				}
 			}
 			while (!ctx->shutdown && frame == NULL) {
 				/* Try and fetch another frame, otherwise sleep */
