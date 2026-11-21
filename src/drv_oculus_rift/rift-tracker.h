@@ -36,4 +36,7 @@ void rift_tracked_device_frame_release (rift_tracked_device *dev_base, rift_trac
 
 void rift_tracker_update_sensor_pose(rift_tracker_ctx *tracker_ctx, rift_sensor_ctx *sensor, posef *new_pose);
 
+void rift_tracker_get_sensor_status(rift_tracker_ctx *ctx, ohmd_rift_sensor_status *out);
+bool rift_tracked_device_get_tracking_state(rift_tracked_device *dev_base, uint64_t *device_time_ns);
+
 #endif

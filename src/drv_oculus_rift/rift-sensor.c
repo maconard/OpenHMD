@@ -77,6 +77,7 @@ struct rift_sensor_ctx_s
 	/* Queue of frames being returned to the capture thread */
 	rift_sensor_frame_queue capture_frame_q;
 	int dropped_frames;
+	unsigned int frames_captured;
 	/* queue of frames awaiting fast analysis */
 	rift_sensor_frame_queue fast_analysis_q;
 	/* cond that's signalled when a frame is put in the fast queue */
@@ -213,6 +214,7 @@ static void frame_captured_cb(rift_sensor_device *dev, ohmd_video_frame *vframe,
 	assert(sensor);
 
 	ohmd_lock_mutex (sensor->sensor_lock);
+	sensor->frames_captured++;
 
 	frame = POP_QUEUE(&sensor->capture_frame_q);
 	/* If there is no queue on the capture frame queue,
@@ -635,6 +637,14 @@ static bool handle_found_pose (rift_sensor_ctx *sensor_ctx,
 	rift_tracked_device_frame_release(dev, &frame->exposure_info);
 
 	return ret;
+}
+
+void rift_sensor_get_status(rift_sensor_ctx *sensor, unsigned int *frames, bool *have_pose)
+{
+	ohmd_lock_mutex (sensor->sensor_lock);
+	*frames = sensor->frames_captured;
+	*have_pose = sensor->pf.have_camera_pose;
+	ohmd_unlock_mutex (sensor->sensor_lock);
 }
 
 const char *rift_sensor_serial_no (rift_sensor_ctx *sensor)

@@ -521,6 +521,44 @@ OHMD_APIENTRYDLL ohmd_status OHMD_APIENTRY ohmd_require_version(int major, int m
  **/
 OHMD_APIENTRYDLL void OHMD_APIENTRY ohmd_sleep(double time);
 
+#define OHMD_RIFT_MAX_SENSORS 4
+
+/** Rift constellation tracking state for one opened device. */
+typedef struct {
+	/** Device position came from a camera observation within the last 0.5 s. */
+	int optical;
+	/** Device clock of the latest IMU sample, in ns. Stops advancing while the device sleeps. */
+	unsigned long long imu_time_ns;
+	/** Touch controllers: capacitive sensors (A/X, B/Y, thumb rest, stick, trigger), 0..1. */
+	float touch[5];
+} ohmd_rift_tracking_status;
+
+/** Rift sensor (camera) state. */
+typedef struct {
+	int n_sensors;
+	struct {
+		char serial[33];
+		/** Frames delivered since streaming started. */
+		unsigned int frames;
+		/** The sensor has a camera pose in the room. */
+		int have_pose;
+	} sensors[OHMD_RIFT_MAX_SENSORS];
+} ohmd_rift_sensor_status;
+
+/**
+ * Get Rift constellation tracking state for a device opened from the Rift driver.
+ *
+ * @return 0 on success, -1 for devices from other drivers.
+ **/
+OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out);
+
+/**
+ * Get the state of the Rift sensors tracking the given device.
+ *
+ * @return 0 on success, -1 for devices from other drivers.
+ **/
+OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out);
+
 #ifdef __cplusplus
 }
 #endif

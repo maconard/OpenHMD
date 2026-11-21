@@ -680,6 +680,31 @@ uint64_t ohmd_monotonic_conv(uint64_t ticks, uint64_t srcTicksPerSecond, uint64_
 		ticks % srcTicksPerSecond * dstTicksPerSecond / srcTicksPerSecond;
 }
 
+#if DRIVER_OCULUS_RIFT
+int rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out);
+int rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out);
+#endif
+
+int OHMD_APIENTRY ohmd_rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out)
+{
+	memset(out, 0, sizeof(*out));
+#if DRIVER_OCULUS_RIFT
+	return rift_get_tracking_status(device, out);
+#else
+	return -1;
+#endif
+}
+
+int OHMD_APIENTRY ohmd_rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out)
+{
+	memset(out, 0, sizeof(*out));
+#if DRIVER_OCULUS_RIFT
+	return rift_get_sensor_status(device, out);
+#else
+	return -1;
+#endif
+}
+
 int ohmd_debug_enabled(void)
 {
 	static int enabled = -1;

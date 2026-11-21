@@ -804,6 +804,47 @@ static int getf(ohmd_device* device, ohmd_float_value type, float* out)
 	return -1;
 }
 
+int rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out)
+{
+	rift_device_priv* dev_priv = rift_device_priv_get(device);
+	rift_tracked_device *tracked_dev = NULL;
+
+	if (device->getf != getf)
+		return -1;
+
+	if (dev_priv->id == 0) {
+		tracked_dev = dev_priv->hmd->tracked_dev;
+	} else if (dev_priv->id == 1 || dev_priv->id == 2) {
+		rift_touch_controller_t *touch = (rift_touch_controller_t *)(dev_priv);
+		tracked_dev = touch->tracked_dev;
+		out->touch[0] = touch->cap_a_x;
+		out->touch[1] = touch->cap_b_y;
+		out->touch[2] = touch->cap_rest;
+		out->touch[3] = touch->cap_stick;
+		out->touch[4] = touch->cap_trigger;
+	}
+
+	if (tracked_dev) {
+		uint64_t device_time_ns;
+		out->optical = rift_tracked_device_get_tracking_state(tracked_dev, &device_time_ns);
+		out->imu_time_ns = device_time_ns;
+	}
+
+	return 0;
+}
+
+int rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out)
+{
+	rift_device_priv* dev_priv = rift_device_priv_get(device);
+
+	if (device->getf != getf)
+		return -1;
+	if (dev_priv->hmd->tracker_ctx)
+		rift_tracker_get_sensor_status(dev_priv->hmd->tracker_ctx, out);
+
+	return 0;
+}
+
 static int set_touch_haptics(ohmd_device *device, bool enable, float duration, float frequency, float amplitude)
 {
 	const float MIN_HAPTIC_DURATION = 0.01;

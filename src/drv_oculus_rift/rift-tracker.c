@@ -1154,6 +1154,34 @@ void rift_tracked_device_frame_release(rift_tracked_device *dev_base, rift_track
 	ohmd_unlock_mutex (dev->device_lock);
 }
 
+void rift_tracker_get_sensor_status(rift_tracker_ctx *ctx, ohmd_rift_sensor_status *out)
+{
+	int i;
+
+	out->n_sensors = ctx->n_sensors < OHMD_RIFT_MAX_SENSORS ? ctx->n_sensors : OHMD_RIFT_MAX_SENSORS;
+	for (i = 0; i < out->n_sensors; i++) {
+		bool have_pose;
+
+		strncpy(out->sensors[i].serial, rift_sensor_serial_no(ctx->sensors[i]), sizeof(out->sensors[i].serial) - 1);
+		rift_sensor_get_status(ctx->sensors[i], &out->sensors[i].frames, &have_pose);
+		out->sensors[i].have_pose = have_pose;
+	}
+}
+
+bool rift_tracked_device_get_tracking_state(rift_tracked_device *dev_base, uint64_t *device_time_ns)
+{
+	rift_tracked_device_priv *dev = (rift_tracked_device_priv *) (dev_base);
+	bool ret;
+
+	ohmd_lock_mutex (dev->device_lock);
+	ret = dev->last_observed_pose_ts != 0 &&
+	    dev->device_time_ns - dev->last_observed_pose_ts < (POSE_LOST_THRESHOLD * 1000000UL);
+	*device_time_ns = dev->device_time_ns;
+	ohmd_unlock_mutex (dev->device_lock);
+
+	return ret;
+}
+
 void rift_tracker_update_sensor_pose(rift_tracker_ctx *tracker_ctx, rift_sensor_ctx *sensor, posef *new_pose)
 {
 	const char *serial_no = rift_sensor_serial_no(sensor);
