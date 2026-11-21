@@ -76,6 +76,7 @@ struct rift_hmd_s {
 	rift_leds leds;
 
 	uint16_t remote_buttons_state;
+	uint16_t proximity;
 
 	rift_tracker_ctx *tracker_ctx;
 
@@ -230,6 +231,8 @@ static void handle_tracker_sensor_msg(rift_hmd_t* priv, uint64_t local_ts, unsig
 
 	/* The CV1 sends the proximity sensor and the lens spacing (IAD slider) ADC in place of the
 	 * magnetometer; the ADC to mm mapping is Monado's (drivers/rift), it spans the slider's 58 to 72 mm. */
+	if (priv->revision == REV_CV1)
+		priv->proximity = (uint16_t)s->mag[0];
 	if (priv->revision == REV_CV1 && s->mag[1] != 0) {
 		float iad_mm = roundf(((s->mag[1] & 0xffff) - 400) / 300.0f * 2.0f + 59.0f * 2.0f) / 2.0f;
 		if (iad_mm >= 55.0f && iad_mm <= 75.0f)
@@ -826,9 +829,12 @@ int rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out
 	if (device->getf != getf)
 		return -1;
 
+	out->proximity = -1;
 	if (dev_priv->id == 0) {
 		tracked_dev = dev_priv->hmd->tracked_dev;
 		out->host_time_ns = dev_priv->hmd->last_report_ts;
+		if (dev_priv->hmd->revision == REV_CV1)
+			out->proximity = dev_priv->hmd->proximity;
 	} else if (dev_priv->id == 1 || dev_priv->id == 2) {
 		rift_touch_controller_t *touch = (rift_touch_controller_t *)(dev_priv);
 		tracked_dev = touch->tracked_dev;

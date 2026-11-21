@@ -533,6 +533,8 @@ typedef struct {
 	float touch[5];
 	/** Host receive time of the latest IMU report in ohmd_monotonic_get() ns; 0 before the first. */
 	unsigned long long host_time_ns;
+	/** CV1 HMD: raw proximity sensor value, over 3 while worn; -1 for other devices. */
+	int proximity;
 } ohmd_rift_tracking_status;
 
 /** Rift sensor (camera) state. */
