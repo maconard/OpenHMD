@@ -26,9 +26,10 @@
 #define __le32_to_cpu
 #endif
 
+/* A __pragma(pack(pop)) inside the macro takes effect before the struct body,
+ * so MSVC gets its packing from the #pragma pack around the structs below */
 #ifdef _MSC_VER
-#define PACKED_STRUCT(name) \
-    __pragma(pack(push, 1)) struct name __pragma(pack(pop))
+#define PACKED_STRUCT(name) struct name
 #elif defined(__GNUC__)
 #define PACKED_STRUCT(name) struct __attribute__((packed)) name
 #endif
@@ -50,6 +51,7 @@
 
 #define VERBOSE_DEBUG 0
 
+#pragma pack(push, 1)
 PACKED_STRUCT(uvc_probe_commit_control) {
 	__le16 bmHint;
 	__u8 bFormatIndex;
@@ -73,6 +75,7 @@ PACKED_STRUCT(uvc_payload_header) {
 	__le16 wSofCounter;
 	__le32 scrSourceClock;
 };
+#pragma pack(pop)
 
 static void
 rift_sensor_uvc_stream_release_frame(ohmd_video_frame *frame, rift_sensor_uvc_stream *stream);
@@ -175,7 +178,6 @@ void process_payload(struct rift_sensor_uvc_stream *stream, unsigned char *paylo
 #endif
 
 	if (frame_id != stream->frame_id) {
-		struct timespec ts;
 		uint64_t time;
 
 		if (stream->frame_collected > 0) {
@@ -185,8 +187,7 @@ void process_payload(struct rift_sensor_uvc_stream *stream, unsigned char *paylo
 		}
 
 		/* Start of new frame */
-		clock_gettime(CLOCK_MONOTONIC, &ts);
-		time = ts.tv_sec * 1000000000 + ts.tv_nsec;
+		time = ohmd_monotonic_get(stream->ohmd_ctx);
 
 		/* Get a frame to capture into */
 		if (stream->cur_frame == NULL) {
@@ -360,7 +361,7 @@ int rift_sensor_uvc_stream_setup (ohmd_context* ohmd_ctx,
 	stream->skip_frame_start = 0;
 
 	ret = libusb_set_auto_detach_kernel_driver(devh, 1);
-	if (ret < 0) {
+	if (ret < 0 && ret != LIBUSB_ERROR_NOT_SUPPORTED) {
 		printf("could not detach uvcvideo driver\n");
 		return ret;
 	}
@@ -470,6 +471,8 @@ int rift_sensor_uvc_stream_setup (ohmd_context* ohmd_ctx,
 	num_packets = (stream->frame_size + packet_size - 1) / packet_size;
 	stream->num_transfers = (num_packets + 31) / 32;
 	num_packets = num_packets / stream->num_transfers;
+	/* WinUSB isochronous IN transfers must span whole 1 ms frames (8 microframes) */
+	num_packets = (num_packets + 7) & ~7;
 
 	stream->transfer = ohmd_alloc(ohmd_ctx, stream->num_transfers * sizeof(*stream->transfer));
 	if (!stream->transfer)
@@ -553,13 +556,12 @@ int rift_sensor_uvc_stream_stop(struct rift_sensor_uvc_stream *stream)
 	int ret;
 	int i;
 
-	ret = libusb_set_interface_alt_setting(stream->devh, 1, 0);
-	if (ret) {
-		LOGW("Failed to clear USB alt setting to 0 for sensor errno %d (%s)", errno, strerror(errno));
-	}
-
 	libusb_lock_event_waiters(stream->usb_ctx);
 	stream->video_running = false;
+
+	/* WinUSB refuses the alt setting change while transfers are pending, so cancel them first */
+	for (i = 0; i < stream->num_transfers; i++)
+		libusb_cancel_transfer(stream->transfer[i]);
 
 	/* Wait for active transfers to finish */
 	while (stream->active_transfers > 0) {
@@ -568,6 +570,11 @@ int rift_sensor_uvc_stream_stop(struct rift_sensor_uvc_stream *stream)
 			break;
 	}
 	libusb_unlock_event_waiters(stream->usb_ctx);
+
+	ret = libusb_set_interface_alt_setting(stream->devh, 1, 0);
+	if (ret) {
+		LOGW("Failed to clear USB alt setting to 0 for sensor: %s", libusb_error_name(ret));
+	}
 
 	/* Free frames */
 	for (i = 0; i < stream->n_alloced_frames; i++) {
