@@ -13,11 +13,13 @@
 #ifndef __RIFT_TRACKER_COMMON_H__
 #define __RIFT_TRACKER_COMMON_H__
 
+#define RIFT_MAX_SENSORS 4
 #define RIFT_MAX_TRACKED_DEVICES 3
 
 /* Side-on angle at which LEDs become occluded */
 #define RIFT_LED_ANGLE 82
 
+typedef struct rift_tracker_ctx_s rift_tracker_ctx;
 typedef struct rift_tracker_exposure_info rift_tracker_exposure_info;
 typedef struct rift_tracked_device_exposure_info rift_tracked_device_exposure_info;
 typedef struct rift_tracked_device_imu_calibration rift_tracked_device_imu_calibration;

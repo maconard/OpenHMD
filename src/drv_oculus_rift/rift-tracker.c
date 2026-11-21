@@ -20,9 +20,11 @@
 
 #include "../exponential-filter.h"
 #include "rift-tracker.h"
+#include "rift-tracker-config.h"
 #include "rift-sensor.h"
 #include "rift-sensor-usb.h"
 
+#include "rift-sensor.h"
 #include "rift-sensor-maths.h"
 #include "rift-sensor-opencv.h"
 #include "rift-sensor-pose-helper.h"
@@ -32,8 +34,6 @@
 #include "ohmd-pipewire.h"
 
 #define ASSERT_MSG(_v, label, ...) if(!(_v)){ fprintf(stderr, __VA_ARGS__); goto label; }
-
-#define MAX_SENSORS 4
 
 /* Number of IMU observations we accumulate before output */
 #define RIFT_MAX_PENDING_IMU_OBSERVATIONS 1000
@@ -91,7 +91,7 @@ struct rift_tracker_pose_delay_slot {
 
 	/* rift_tracked_device_model_pose_update stores the observed poses here */
 	int n_pose_reports;
-	rift_tracker_pose_report pose_reports[MAX_SENSORS];
+	rift_tracker_pose_report pose_reports[RIFT_MAX_SENSORS];
 	/* Number of reports we used from the supplied ones */
 	int n_used_reports;
 };
@@ -161,7 +161,9 @@ struct rift_tracker_ctx_s
 	int exposure_history_size;
 	rift_tracker_exposure_info exposure_history[NUM_EXPOSURE_HISTORY];
 
-	rift_sensor_ctx *sensors[MAX_SENSORS];
+	rift_tracker_config config;
+
+	rift_sensor_ctx *sensors[RIFT_MAX_SENSORS];
 	uint8_t n_sensors;
 
 	rift_tracked_device_priv devices[RIFT_MAX_TRACKED_DEVICES];
@@ -276,10 +278,15 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 	rift_tracker_ctx *tracker_ctx = NULL;
 	int ret, i;
 	libusb_device **devs;
+	posef room_pose_offset;
 
 	tracker_ctx = ohmd_alloc(ohmd_ctx, sizeof (rift_tracker_ctx));
 	tracker_ctx->ohmd_ctx = ohmd_ctx;
 	tracker_ctx->tracker_lock = ohmd_create_mutex(ohmd_ctx);
+
+	rift_tracker_config_init(&tracker_ctx->config);
+	rift_tracker_config_load(ohmd_ctx, &tracker_ctx->config);
+	rift_tracker_config_get_room_pose_offset(&tracker_ctx->config, &room_pose_offset);
 
 	for (i = 0; i < RIFT_MAX_TRACKED_DEVICES; i++) {
 		rift_tracked_device_priv *dev = tracker_ctx->devices + i;
@@ -300,7 +307,7 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 	for (i = 0; devs[i]; ++i) {
 		struct libusb_device_descriptor desc;
 		libusb_device_handle *usb_devh;
-		unsigned char serial[33];
+		unsigned char serial[RIFT_SENSOR_SERIAL_LEN+1];
 
 		ret = libusb_get_device_descriptor(devs[i], &desc);
 		if (ret < 0)
@@ -315,7 +322,7 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 		}
 
 		sprintf ((char *) serial, "UNKNOWN");
-		serial[32] = '\0';
+		serial[RIFT_SENSOR_SERIAL_LEN] = '\0';
 
 		if (desc.iSerialNumber) {
 			ret = libusb_get_string_descriptor_ascii(usb_devh, desc.iSerialNumber, serial, 32);
@@ -336,10 +343,25 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 			continue;
 		}
 
+		posef camera_pose;
+		if (rift_tracker_config_get_sensor_pose(&tracker_ctx->config, (char *) serial, &camera_pose)) {
+			LOGI("Loaded pose for sensor %s from room store: "
+			    "\"pos\" : [ %f, %f, %f ], \"orient\" : [ %f, %f, %f, %f ]",
+			    serial,
+			    camera_pose.pos.x, camera_pose.pos.y,
+			    camera_pose.pos.z, camera_pose.orient.x,
+			    camera_pose.orient.y, camera_pose.orient.z,
+			    camera_pose.orient.w);
+
+			/* Add the room offset to the camera pose we give the sensor */
+			oposef_apply(&camera_pose, &room_pose_offset, &camera_pose);
+			rift_sensor_set_pose(sensor_ctx, &camera_pose);
+		}
+
 		tracker_ctx->sensors[tracker_ctx->n_sensors] = sensor_ctx;
 		tracker_ctx->n_sensors++;
-		if (tracker_ctx->n_sensors == MAX_SENSORS) {
-			LOGI("Found the maximum number of supported sensors: %d.\n", MAX_SENSORS);
+		if (tracker_ctx->n_sensors == RIFT_MAX_SENSORS) {
+			LOGI("Found the maximum number of supported sensors: %d.\n", RIFT_MAX_SENSORS);
 			break;
 		}
 	}
@@ -812,7 +834,7 @@ bool rift_tracked_device_model_pose_update(rift_tracked_device *dev_base, uint64
 
 		frame_fusion_slot = slot->slot_id;
 
-		if (slot->n_pose_reports < MAX_SENSORS) {
+		if (slot->n_pose_reports < RIFT_MAX_SENSORS) {
 			rift_tracker_pose_report *report = slot->pose_reports + slot->n_pose_reports;
 
 			report->report_used = update_position;
@@ -1130,4 +1152,14 @@ void rift_tracked_device_frame_release(rift_tracked_device *dev_base, rift_track
 		rift_tracked_device_exposure_release_locked(dev, dev_info);
 	}
 	ohmd_unlock_mutex (dev->device_lock);
+}
+
+void rift_tracker_update_sensor_pose(rift_tracker_ctx *tracker_ctx, rift_sensor_ctx *sensor, posef *new_pose)
+{
+	const char *serial_no = rift_sensor_serial_no(sensor);
+
+	ohmd_lock_mutex (tracker_ctx->tracker_lock);
+	rift_tracker_config_set_sensor_pose(&tracker_ctx->config, serial_no, new_pose);
+	rift_tracker_config_save(tracker_ctx->ohmd_ctx, &tracker_ctx->config);
+	ohmd_unlock_mutex (tracker_ctx->tracker_lock);
 }

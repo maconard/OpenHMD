@@ -17,6 +17,8 @@
 #include "rift-sensor.h"
 #include "rift-sensor-pose-search.h"
 
+#include "rift-tracker.h"
+
 #include "rift-sensor-blobwatch.h"
 
 #include "sensor/ar0134.h"
@@ -54,7 +56,7 @@ struct rift_sensor_ctx_s
 {
 	ohmd_context* ohmd_ctx;
 	int id;
-	char serial_no[32];
+	char serial_no[RIFT_SENSOR_SERIAL_LEN+1];
 
 	rift_tracker_ctx *tracker;
 
@@ -181,6 +183,11 @@ release_capture_frame(rift_sensor_ctx *sensor, rift_sensor_analysis_frame *frame
 	rift_tracker_frame_release (sensor->tracker, now,
 			frame->vframe->start_ts, frame->exposure_info_valid ? &frame->exposure_info : NULL,
 			sensor->serial_no);
+
+	if (sensor->pf.camera_pose_changed) {
+		rift_tracker_update_sensor_pose(sensor->tracker, sensor, &sensor->pf.camera_pose);
+		sensor->pf.camera_pose_changed = false;
+	}
 
 	if (frame->bwobs) {
 		blobwatch_release_observation(sensor->bw, frame->bwobs);
@@ -633,4 +640,26 @@ static bool handle_found_pose (rift_sensor_ctx *sensor_ctx,
 const char *rift_sensor_serial_no (rift_sensor_ctx *sensor)
 {
 	return sensor->serial_no;
+}
+
+void rift_sensor_set_pose(rift_sensor_ctx *sensor, posef *camera_pose)
+{
+	const vec3f gravity_vector = {{ 0.0, 1.0, 0.0 }};
+
+	ohmd_lock_mutex (sensor->sensor_lock);
+	sensor->pf.camera_pose = *camera_pose;
+	sensor->pf.have_camera_pose = true;
+	sensor->pf.camera_pose_changed = false;
+
+	quatf cam_orient = camera_pose->orient;
+
+	oquatf_inverse(&cam_orient);
+	oquatf_get_rotated(&cam_orient, &gravity_vector, &sensor->pf.cam_gravity_vector);
+
+	ohmd_unlock_mutex (sensor->sensor_lock);
+
+	LOGI("Set sensor %d pose to orient %f %f %f %f  pos %f %f %f",
+	    sensor->id,
+	    camera_pose->orient.x, camera_pose->orient.y, camera_pose->orient.z, camera_pose->orient.w,
+	    camera_pose->pos.x, camera_pose->pos.y, camera_pose->pos.z);
 }

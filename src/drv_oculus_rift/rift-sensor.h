@@ -10,10 +10,12 @@
 #include "rift.h"
 #include "rift-sensor-device.h"
 #include "rift-sensor-pose-helper.h"
-#include "rift-tracker.h"
+#include "rift-tracker-common.h"
 
 #ifndef __RIFT_SENSOR_H__
 #define __RIFT_SENSOR_H__
+
+#define RIFT_SENSOR_SERIAL_LEN 32
 
 typedef struct rift_sensor_ctx_s rift_sensor_ctx;
 typedef struct rift_sensor_frame_device_state rift_sensor_frame_device_state;
@@ -77,5 +79,7 @@ void rift_sensor_free (rift_sensor_ctx *sensor_ctx);
 const char *rift_sensor_serial_no (rift_sensor_ctx *sensor);
 bool rift_sensor_add_device (rift_sensor_ctx *ctx, rift_tracked_device *device);
 bool rift_sensor_start(rift_sensor_ctx *sensor);
+
+void rift_sensor_set_pose(rift_sensor_ctx *sensor, posef *camera_pose);
 
 #endif
