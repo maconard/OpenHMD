@@ -531,6 +531,8 @@ typedef struct {
 	unsigned long long imu_time_ns;
 	/** Touch controllers: capacitive sensors (A/X, B/Y, thumb rest, stick, trigger), 0..1. */
 	float touch[5];
+	/** Host receive time of the latest IMU report in ohmd_monotonic_get() ns; 0 before the first. */
+	unsigned long long host_time_ns;
 } ohmd_rift_tracking_status;
 
 /** Rift sensor (camera) state. */

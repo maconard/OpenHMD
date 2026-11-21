@@ -251,6 +251,7 @@ struct rift_touch_controller_s {
 
 	int device_num;
 	rift_tracked_device *tracked_dev;
+	uint64_t last_report_ts;
 
 	bool have_calibration;
 	rift_touch_calibration calibration;

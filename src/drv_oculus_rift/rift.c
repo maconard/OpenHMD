@@ -66,6 +66,7 @@ struct rift_hmd_s {
 	uint32_t last_imu_timestamp;
 	double last_keep_alive;
 	rift_tracked_device *tracked_dev;
+	uint64_t last_report_ts;
 
 	struct {
 		vec3f pos;
@@ -223,6 +224,8 @@ static void handle_tracker_sensor_msg(rift_hmd_t* priv, uint64_t local_ts, unsig
 	pkt_tracker_sensor* s = &priv->sensor;
 	vec3f raw_mag;
 
+	priv->last_report_ts = local_ts;
+
 	dump_packet_tracker_sensor(s);
 
 	int32_t mag32[] = { s->mag[0], s->mag[1], s->mag[2] };
@@ -316,6 +319,8 @@ static void handle_touch_controller_message(rift_hmd_t *hmd, uint64_t local_ts,
 	// The top bits are carrying something unknown. Ignore them
 	uint8_t buttons = msg->touch.buttons & 0xf;
 	rift_touch_calibration *c = &touch->calibration;
+
+	touch->last_report_ts = local_ts;
 
 	if (touch->buttons != buttons) {
 		LOGV ("touch controller %d buttons now %x",
@@ -814,9 +819,11 @@ int rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out
 
 	if (dev_priv->id == 0) {
 		tracked_dev = dev_priv->hmd->tracked_dev;
+		out->host_time_ns = dev_priv->hmd->last_report_ts;
 	} else if (dev_priv->id == 1 || dev_priv->id == 2) {
 		rift_touch_controller_t *touch = (rift_touch_controller_t *)(dev_priv);
 		tracked_dev = touch->tracked_dev;
+		out->host_time_ns = touch->last_report_ts;
 		out->touch[0] = touch->cap_a_x;
 		out->touch[1] = touch->cap_b_y;
 		out->touch[2] = touch->cap_rest;
