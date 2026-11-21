@@ -97,7 +97,6 @@ ohmd_thread* ohmd_create_thread(ohmd_context* ctx, unsigned int (*routine)(void*
 
 void ohmd_destroy_thread(ohmd_thread* thread)
 {
-	ohmd_sleep(3);
 	WaitForSingleObject(thread->handle, INFINITE);
 	CloseHandle(thread->handle);
 	free(thread);
