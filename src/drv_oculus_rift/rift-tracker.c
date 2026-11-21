@@ -255,6 +255,22 @@ rift_tracker_add_device (rift_tracker_ctx *ctx, int device_id, posef *imu_pose, 
 	return (rift_tracked_device *) next_dev;
 }
 
+/* OHMD_RIFT_SENSORS: comma separated serials of the sensors to use; unset or empty uses all */
+static bool sensor_selected(const char *serial)
+{
+	const char *list = getenv("OHMD_RIFT_SENSORS");
+	size_t len = strlen(serial);
+	const char *p;
+
+	if (list == NULL || list[0] == '\0')
+		return true;
+	for (p = strstr(list, serial); p != NULL; p = strstr(p + 1, serial)) {
+		if ((p == list || p[-1] == ',') && (p[len] == ',' || p[len] == '\0'))
+			return true;
+	}
+	return false;
+}
+
 static unsigned int uvc_handle_events(void *arg)
 {
 	rift_tracker_ctx *tracker_ctx = arg;
@@ -329,6 +345,12 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 			ret = libusb_get_string_descriptor_ascii(usb_devh, desc.iSerialNumber, serial, 32);
 			if (ret < 0)
 				fprintf (stderr, "Failed to read the Rift Sensor Serial number.\n");
+		}
+
+		if (!sensor_selected((char *) serial)) {
+			LOGI("Skipping Rift Sensor %s, not in OHMD_RIFT_SENSORS", serial);
+			libusb_close(usb_devh);
+			continue;
 		}
 
 		rift_sensor_device *sensor_device = rift_sensor_usb_new (ohmd_ctx, tracker_ctx->n_sensors, (char *) serial, tracker_ctx->usb_ctx, usb_devh, radio_id);
@@ -791,8 +813,8 @@ bool rift_tracked_device_model_pose_update(rift_tracked_device *dev_base, uint64
 		 * ignore it. */
 		if (dev_info->had_pose_lock && !POSE_HAS_FLAGS(score, RIFT_POSE_MATCH_POSITION) && dev->last_observed_pose_ts > frame_device_time_ns) {
 			update_position = false;
-			LOGI("Ignoring position observation with error %f %f %f (prior stddev was %f %f %f)\n",
-				pos_error.x, pos_error.y, pos_error.z,
+			LOGI("Ignoring position observation for dev %d from %s with error %f %f %f (prior stddev was %f %f %f)\n",
+				dev->base.id, source, pos_error.x, pos_error.y, pos_error.z,
 				dev_info->pos_error.x, dev_info->pos_error.y, dev_info->pos_error.z);
 		}
 		else {
@@ -883,12 +905,14 @@ bool rift_tracked_device_model_pose_update(rift_tracked_device *dev_base, uint64
 }
 
 /* Called with the device lock held */
-void rift_tracked_device_get_model_pose_locked(rift_tracked_device_priv *dev, uint32_t device_ts, posef *pose, vec3f *pos_error, vec3f *rot_error)
+void rift_tracked_device_get_model_pose_locked(rift_tracked_device_priv *dev, uint32_t device_ts, posef *pose, vec3f *pos_error, vec3f *rot_error, float *ang_speed)
 {
 	posef imu_global_pose, model_pose;
-	vec3f global_pos_error, global_rot_error;
+	vec3f global_pos_error, global_rot_error, ang_vel;
 
-	rift_kalman_6dof_get_pose_at(&dev->ukf_fusion, dev->device_time_ns, &imu_global_pose, NULL, NULL, NULL, &global_pos_error, &global_rot_error);
+	rift_kalman_6dof_get_pose_at(&dev->ukf_fusion, dev->device_time_ns, &imu_global_pose, NULL, NULL, &ang_vel, &global_pos_error, &global_rot_error);
+	if (ang_speed)
+		*ang_speed = ovec3f_get_length(&ang_vel);
 
 	/* Apply the pose conversion from IMU->model */
 	oposef_apply(&dev->model_from_fusion, &imu_global_pose, &model_pose);
@@ -1064,7 +1088,7 @@ rift_tracked_device_on_new_exposure(rift_tracked_device_priv *dev, rift_tracked_
 	}
 	dev_info->last_acquired_pose_lock_ts = dev->last_acquired_pose_lock_ts;
 
-	rift_tracked_device_get_model_pose_locked(dev, dev->device_time_ns, &dev_info->capture_pose, &dev_info->pos_error, &dev_info->rot_error);
+	rift_tracked_device_get_model_pose_locked(dev, dev->device_time_ns, &dev_info->capture_pose, &dev_info->pos_error, &dev_info->rot_error, &dev_info->ang_speed);
 
 	if (slot) {
 		slot->device_time_ns = dev_info->device_time_ns;

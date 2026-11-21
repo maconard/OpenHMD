@@ -38,6 +38,7 @@ struct rift_tracked_device_exposure_info {
 	posef capture_pose;
 	vec3f pos_error;
 	vec3f rot_error;
+	float ang_speed; /* rad/s */
 };
 
 struct rift_tracker_exposure_info {

@@ -418,8 +418,10 @@ update_device_and_blobs (rift_pose_finder *pf, rift_sensor_analysis_frame *frame
 		pf->sensor_id, POSE_HAS_FLAGS(score, RIFT_POSE_MATCH_STRONG) ? "strong" : "good",
 		score->matched_blobs, score->visible_leds, score->match_flags);
 
-	/* Arbitrary 25 degree threshold for gravity vector matches the minimum error */
-	if (!pf->have_camera_pose && dev->id == 0 && dev_state->gravity_error_rad <= DEG_TO_RAD(25.0)) {
+	/* Arbitrary 25 degree threshold for gravity vector matches the minimum error. Only a headset held
+	 * still sets the camera pose; while it turns, exposure timing errors skew the fused pose. */
+	if (!pf->have_camera_pose && dev->id == 0 && dev_state->gravity_error_rad <= DEG_TO_RAD(25.0) &&
+	    exp_dev_info->ang_speed < DEG_TO_RAD(5.0)) {
 		/* No camera pose yet. If this is the HMD, we had an IMU pose at capture time,
 		 * and the fusion has a good gravity vector from the IMU, use it to
 		 * initialise the camera (world->camera) pose using the current headset pose.
