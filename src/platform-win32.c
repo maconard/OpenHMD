@@ -235,17 +235,34 @@ int ohmd_ensure_path(const char* pathname)
 
 int ohmd_write_file(const char* filename, char *buf, unsigned long buf_len)
 {
-	FILE* f = fopen(filename, "wb");
+	char tmp[OHMD_STR_SIZE];
+	FILE* f;
+	int ret;
 
+	if (snprintf(tmp, sizeof(tmp), "%s.tmp", filename) >= (int)sizeof(tmp))
+		return ENAMETOOLONG;
+
+	f = fopen(tmp, "wb");
 	if (f == NULL)
 		return errno;
 
 	if (fwrite(buf, 1, buf_len, f) != buf_len) {
 		fclose(f);
+		DeleteFileA(tmp);
 		return EIO;
 	}
 
-	return fclose(f);
+	ret = fclose(f);
+	if (ret != 0) {
+		DeleteFileA(tmp);
+		return ret;
+	}
+
+	if (!MoveFileExA(tmp, filename, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+		DeleteFileA(tmp);
+		return EIO;
+	}
+	return 0;
 }
 
 const char *ohmd_get_config_dir(ohmd_context *ctx)

@@ -642,7 +642,7 @@ int ohmd_set_config(ohmd_context *ctx, const char *key, char *buf, unsigned long
 	int ret;
 
 	/* Make sure the config path exists first */
-	if ((ret = ohmd_ensure_path(config_path)) < 0) {
+	if ((ret = ohmd_ensure_path(config_path)) != 0) {
 		ohmd_set_error (ctx, "Could not create config directory");
 		return ret;
 	}
@@ -653,8 +653,8 @@ int ohmd_set_config(ohmd_context *ctx, const char *key, char *buf, unsigned long
 		return -1;
 	}
 
-	if ((ret = ohmd_write_file (filename, buf, buf_len)) < 0) {
-		ohmd_set_error (ctx, "Could not create config directory");
+	if ((ret = ohmd_write_file (filename, buf, buf_len)) != 0) {
+		ohmd_set_error (ctx, "Could not write config file");
 		return ret;
 	}
 
