@@ -113,8 +113,9 @@ void rift_tracker_config_load(ohmd_context *ctx, rift_tracker_config *config)
 	return;
 
 fail_parse:
-	LOGW("Failed to parse room config data");
-	nx_json_free (nxj);
+	LOGW("Failed to parse %s, ignoring it", CONFIG_FILE_KEY);
+	if (nxj)
+		nx_json_free (nxj);
 	free(json);
 }
 
