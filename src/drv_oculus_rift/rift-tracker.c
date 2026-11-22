@@ -158,6 +158,17 @@ struct rift_tracker_ctx_s
 	ohmd_thread* usb_thread;
 	int usb_completed;
 
+	uint8_t radio_id[5];
+	/* Held while sensors are added and while devices are added to the sensors */
+	ohmd_mutex *sensors_lock;
+	ohmd_thread *sensor_watch_thread;
+	volatile int sensor_watch_stop;
+	volatile int sensor_rescan;
+	/* Watch thread only: sensors whose USB device was closed after it went away */
+	bool sensor_released[RIFT_MAX_SENSORS];
+	bool sensor_reopen_logged[RIFT_MAX_SENSORS];
+	double sensor_retry_at[RIFT_MAX_SENSORS];
+
 	int exposure_history_index;
 	int exposure_history_size;
 	rift_tracker_exposure_info exposure_history[NUM_EXPOSURE_HISTORY];
@@ -195,11 +206,13 @@ rift_tracker_add_device (rift_tracker_ctx *ctx, int device_id, posef *imu_pose, 
 
 	assert (ctx->n_devices < RIFT_MAX_TRACKED_DEVICES);
 
+	ohmd_lock_mutex (ctx->sensors_lock);
 	ohmd_lock_mutex (ctx->tracker_lock);
 	next_dev = ctx->devices + ctx->n_devices;
 
 	next_dev->base.id = device_id;
-	next_dev->n_delay_slots = ctx->n_sensors != 0 ? NUM_POSE_DELAY_SLOTS : 0;
+	/* also without sensors: the sensor watch can add them later */
+	next_dev->n_delay_slots = NUM_POSE_DELAY_SLOTS;
 	rift_kalman_6dof_init(&next_dev->ukf_fusion, &init_pose, next_dev->n_delay_slots);
 	next_dev->last_acquired_pose_lock_ts = next_dev->last_reported_pose = next_dev->last_observed_orient_ts = next_dev->last_observed_pose_ts = next_dev->device_time_ns = 0;
 
@@ -253,6 +266,7 @@ rift_tracker_add_device (rift_tracker_ctx *ctx, int device_id, posef *imu_pose, 
 			LOGE("Failed to configure object tracking for device %d\n", device_id);
 		}
 	}
+	ohmd_unlock_mutex (ctx->sensors_lock);
 
 	printf("device %d online. Now tracking.\n", device_id);
 	return (rift_tracked_device *) next_dev;
@@ -290,6 +304,131 @@ static unsigned int uvc_handle_events(void *arg)
 	return 0;
 }
 
+/* A sensor not seen at start: opens it, gives it its stored pose and the tracked devices */
+static void add_sensor(rift_tracker_ctx *ctx, libusb_device_handle *devh, const char *serial)
+{
+	rift_sensor_device *dev;
+	rift_sensor_ctx *sensor;
+	posef camera_pose, room_offset;
+	bool have_pose;
+	int i;
+
+	dev = rift_sensor_usb_new (ctx->ohmd_ctx, ctx->n_sensors, serial, ctx->usb_ctx, devh, ctx->radio_id);
+	if (dev == NULL) {
+		LOGW("Failed to open Rift Sensor USB device %s", serial);
+		return;
+	}
+	sensor = rift_sensor_new (ctx->ohmd_ctx, ctx->n_sensors, serial, dev, ctx);
+
+	ohmd_lock_mutex (ctx->tracker_lock);
+	have_pose = rift_tracker_config_get_sensor_pose(&ctx->config, serial, &camera_pose);
+	room_offset = ctx->applied_room_offset;
+	ohmd_unlock_mutex (ctx->tracker_lock);
+	if (have_pose) {
+		oposef_apply(&camera_pose, &room_offset, &camera_pose);
+		rift_sensor_set_pose(sensor, &camera_pose);
+	}
+
+	ohmd_lock_mutex (ctx->sensors_lock);
+	for (i = 0; i < ctx->n_devices; i++) {
+		if (!rift_sensor_add_device (sensor, (rift_tracked_device *) (ctx->devices + i)))
+			LOGE("Failed to configure object tracking for device %d on sensor %s", ctx->devices[i].base.id, serial);
+	}
+	ohmd_lock_mutex (ctx->tracker_lock);
+	ctx->sensors[ctx->n_sensors] = sensor;
+	ctx->n_sensors++;
+	ohmd_unlock_mutex (ctx->tracker_lock);
+	ohmd_unlock_mutex (ctx->sensors_lock);
+
+	if (!rift_sensor_start (sensor))
+		LOGW("Failed to start video stream for sensor %s", serial);
+	LOGI("Rift Sensor %s connected%s", serial, have_pose ? "" : ", no stored pose");
+}
+
+/* Opens sensors that came back or appeared: released sensors by serial, new ones while there is room */
+static void scan_sensors(rift_tracker_ctx *ctx)
+{
+	libusb_device **devs;
+	int i, j;
+
+	if (libusb_get_device_list(ctx->usb_ctx, &devs) < 0)
+		return;
+
+	for (i = 0; devs[i]; i++) {
+		struct libusb_device_descriptor desc;
+		libusb_device_handle *devh;
+		unsigned char serial[RIFT_SENSOR_SERIAL_LEN+1] = { 0 };
+		int slot = -1;
+		bool in_use = false;
+
+		if (libusb_get_device_descriptor(devs[i], &desc) < 0 || desc.idVendor != 0x2833 ||
+		    (desc.idProduct != CV1_PID && desc.idProduct != DK2_PID) || !desc.iSerialNumber)
+			continue;
+		for (j = 0; j < ctx->n_sensors; j++)
+			if (rift_sensor_get_usb_device(ctx->sensors[j]) == devs[i])
+				in_use = true;
+		if (in_use || libusb_open(devs[i], &devh) != 0)
+			continue;
+		if (libusb_get_string_descriptor_ascii(devh, desc.iSerialNumber, serial, RIFT_SENSOR_SERIAL_LEN) < 0) {
+			libusb_close(devh);
+			continue;
+		}
+		for (j = 0; j < ctx->n_sensors; j++)
+			if (strcmp(rift_sensor_serial_no(ctx->sensors[j]), (char *) serial) == 0)
+				slot = j;
+
+		if (slot >= 0 && ctx->sensor_released[slot] && ohmd_get_tick() < ctx->sensor_retry_at[slot]) {
+			libusb_close(devh);
+		} else if (slot >= 0 && ctx->sensor_released[slot]) {
+			rift_sensor_device *dev = rift_sensor_usb_new (ctx->ohmd_ctx, slot, (char *) serial, ctx->usb_ctx, devh, ctx->radio_id);
+			if (dev && rift_sensor_attach_device(ctx->sensors[slot], dev)) {
+				ctx->sensor_released[slot] = false;
+				LOGI("Rift Sensor %s reconnected", serial);
+			} else {
+				ctx->sensor_retry_at[slot] = ohmd_get_tick() + 10.0;
+				if (!ctx->sensor_reopen_logged[slot])
+					LOGW("Rift Sensor %s is back but failed to reopen; retrying every 10 s", serial);
+				ctx->sensor_reopen_logged[slot] = true;
+			}
+		} else if (slot < 0 && ctx->n_sensors < RIFT_MAX_SENSORS && sensor_selected((char *) serial)) {
+			add_sensor(ctx, devh, (char *) serial);
+		} else {
+			libusb_close(devh);
+		}
+	}
+	libusb_free_device_list(devs, 1);
+}
+
+/* Closes the USB device of a sensor that went away and reopens it when it comes back */
+static unsigned int sensor_watch(void *arg)
+{
+	rift_tracker_ctx *ctx = arg;
+	double last_scan = ohmd_get_tick();
+	int i;
+
+	while (!ctx->sensor_watch_stop) {
+		bool any_released = false;
+
+		ohmd_sleep(0.25);
+		for (i = 0; i < ctx->n_sensors; i++) {
+			rift_sensor_ctx *sensor = ctx->sensors[i];
+			if (!ctx->sensor_released[i] && rift_sensor_is_lost(sensor) && rift_sensor_release_device(sensor)) {
+				ctx->sensor_released[i] = true;
+				ctx->sensor_reopen_logged[i] = false;
+				ctx->sensor_retry_at[i] = 0;
+				LOGW("Rift Sensor %s disconnected", rift_sensor_serial_no(sensor));
+			}
+			any_released = any_released || ctx->sensor_released[i];
+		}
+		if ((any_released || ctx->sensor_rescan) && ohmd_get_tick() - last_scan >= 2.0) {
+			ctx->sensor_rescan = 0;
+			scan_sensors(ctx);
+			last_scan = ohmd_get_tick();
+		}
+	}
+	return 0;
+}
+
 rift_tracker_ctx *
 rift_tracker_new (ohmd_context* ohmd_ctx,
 		const uint8_t radio_id[5])
@@ -303,6 +442,8 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 	tracker_ctx->ohmd_ctx = ohmd_ctx;
 	tracker_ctx->tracker_lock = ohmd_create_mutex(ohmd_ctx);
 	tracker_ctx->save_lock = ohmd_create_mutex(ohmd_ctx);
+	tracker_ctx->sensors_lock = ohmd_create_mutex(ohmd_ctx);
+	memcpy(tracker_ctx->radio_id, radio_id, sizeof(tracker_ctx->radio_id));
 
 	rift_tracker_config_init(&tracker_ctx->config);
 	rift_tracker_config_load(ohmd_ctx, &tracker_ctx->config);
@@ -404,6 +545,8 @@ rift_tracker_new (ohmd_context* ohmd_ctx,
 			LOGW("Failed to start video stream for sensor %s\n", rift_sensor_serial_no (sensor));
 		}
 	}
+
+	tracker_ctx->sensor_watch_thread = ohmd_create_thread (ohmd_ctx, sensor_watch, tracker_ctx);
 
 	return tracker_ctx;
 
@@ -593,6 +736,11 @@ rift_tracker_free (rift_tracker_ctx *tracker_ctx)
 	if (!tracker_ctx)
 		return;
 
+	if (tracker_ctx->sensor_watch_thread) {
+		tracker_ctx->sensor_watch_stop = 1;
+		ohmd_destroy_thread (tracker_ctx->sensor_watch_thread);
+	}
+
 	for (i = 0; i < tracker_ctx->n_sensors; i++) {
 		rift_sensor_ctx *sensor_ctx = tracker_ctx->sensors[i];
 		rift_sensor_free (sensor_ctx);
@@ -618,6 +766,7 @@ rift_tracker_free (rift_tracker_ctx *tracker_ctx)
 
 	ohmd_destroy_mutex (tracker_ctx->tracker_lock);
 	ohmd_destroy_mutex (tracker_ctx->save_lock);
+	ohmd_destroy_mutex (tracker_ctx->sensors_lock);
 	free (tracker_ctx);
 }
 
@@ -1186,16 +1335,28 @@ void rift_tracked_device_frame_release(rift_tracked_device *dev_base, rift_track
 
 void rift_tracker_get_sensor_status(rift_tracker_ctx *ctx, ohmd_rift_sensor_status *out)
 {
+	rift_sensor_ctx *sensors[RIFT_MAX_SENSORS];
 	int i;
 
+	ohmd_lock_mutex (ctx->tracker_lock);
 	out->n_sensors = ctx->n_sensors < OHMD_RIFT_MAX_SENSORS ? ctx->n_sensors : OHMD_RIFT_MAX_SENSORS;
-	for (i = 0; i < out->n_sensors; i++) {
-		bool have_pose;
+	for (i = 0; i < out->n_sensors; i++)
+		sensors[i] = ctx->sensors[i];
+	ohmd_unlock_mutex (ctx->tracker_lock);
 
-		strncpy(out->sensors[i].serial, rift_sensor_serial_no(ctx->sensors[i]), sizeof(out->sensors[i].serial) - 1);
-		rift_sensor_get_status(ctx->sensors[i], &out->sensors[i].frames, &have_pose);
+	for (i = 0; i < out->n_sensors; i++) {
+		bool have_pose, connected;
+
+		strncpy(out->sensors[i].serial, rift_sensor_serial_no(sensors[i]), sizeof(out->sensors[i].serial) - 1);
+		rift_sensor_get_status(sensors[i], &out->sensors[i].frames, &have_pose, &connected);
 		out->sensors[i].have_pose = have_pose;
+		out->sensors[i].connected = connected;
 	}
+}
+
+void rift_tracker_rescan_sensors(rift_tracker_ctx *ctx)
+{
+	ctx->sensor_rescan = 1;
 }
 
 bool rift_tracked_device_get_tracking_state(rift_tracked_device *dev_base, uint64_t *device_time_ns)

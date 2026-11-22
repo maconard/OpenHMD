@@ -5,6 +5,8 @@
  */
 
 /* Oculus Rift driver - positional tracking interface */
+#include <libusb.h>
+
 #include "ohmd-video.h"
 
 #include "rift.h"
@@ -81,6 +83,16 @@ bool rift_sensor_add_device (rift_sensor_ctx *ctx, rift_tracked_device *device);
 bool rift_sensor_start(rift_sensor_ctx *sensor);
 
 void rift_sensor_set_pose(rift_sensor_ctx *sensor, posef *camera_pose);
-void rift_sensor_get_status(rift_sensor_ctx *sensor, unsigned int *frames, bool *have_pose);
+void rift_sensor_get_status(rift_sensor_ctx *sensor, unsigned int *frames, bool *have_pose, bool *connected);
+
+/* USB device of the sensor's open stream, NULL while it has none */
+libusb_device *rift_sensor_get_usb_device(rift_sensor_ctx *sensor);
+/* True when the sensor has no USB device or its stream died, as when it is unplugged */
+bool rift_sensor_is_lost(rift_sensor_ctx *sensor);
+/* Stops capture and closes the USB device once analysis has handed back every frame; false until
+ * then. The sensor keeps its pose and tracked devices for rift_sensor_attach_device. */
+bool rift_sensor_release_device(rift_sensor_ctx *sensor);
+/* Streams from dev, a newly opened USB device for this sensor; on failure dev is freed */
+bool rift_sensor_attach_device(rift_sensor_ctx *sensor, rift_sensor_device *dev);
 
 #endif

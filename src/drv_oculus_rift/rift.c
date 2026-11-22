@@ -39,6 +39,9 @@
 #define KEEP_ALIVE_VALUE (10 * 1000)
 #define SETFLAG(_s, _flag, _val) (_s) = ((_s) & ~(_flag)) | ((_val) ? (_flag) : 0)
 
+/* Consecutive failed HID reads (one per update, about 1 ms apart) after which the HMD counts as gone */
+#define RIFT_LOST_READ_ERRORS 100
+
 typedef enum {
 	REV_DK1,
 	REV_DK2,
@@ -55,6 +58,11 @@ struct rift_hmd_s {
 	hid_device* handle;
 	hid_device* radio_handle;
 	rift_hmd_radio_state radio;
+
+	/* Consecutive failed reads; the first of a run is logged */
+	int read_errors;
+	int radio_read_errors;
+	bool keepalive_failed;
 
 	pkt_sensor_range sensor_range;
 	pkt_imu_calibration imu_calibration;
@@ -514,8 +522,13 @@ static void rift_send_keepalive(rift_hmd_t *priv)
 		ka_size = encode_dk1_keep_alive(buffer, &keep_alive);
 	else
 		ka_size = encode_dk2_keep_alive(buffer, &keep_alive);
-	if (send_feature_report(priv, buffer, ka_size) == -1)
-		LOGW("error sending keepalive");
+	if (send_feature_report(priv, buffer, ka_size) == -1) {
+		if (!priv->keepalive_failed)
+			LOGW("error sending keepalive");
+		priv->keepalive_failed = true;
+	} else {
+		priv->keepalive_failed = false;
+	}
 }
 
 
@@ -621,9 +634,15 @@ static void update_hmd(rift_hmd_t *priv)
 
 		size = hid_read(priv->handle, buffer, FEATURE_BUFFER_SIZE);
 		if(size < 0){
-			LOGE("error reading from HMD");
+			if (priv->read_errors++ == 0)
+				LOGE("error reading from HMD");
 			break;
-		} else if(size > 0) {
+		}
+		if (priv->read_errors > 0) {
+			LOGI("HMD reads recovered after %d errors", priv->read_errors);
+			priv->read_errors = 0;
+		}
+		if(size > 0) {
 			// currently the only message type the hardware supports (I think)
 			if(buffer[0] == RIFT_IRQ_SENSORS_DK1 || buffer[0] == RIFT_IRQ_SENSORS_DK2) {
 				handle_tracker_sensor_msg(priv, ts, buffer, size);
@@ -640,9 +659,15 @@ static void update_hmd(rift_hmd_t *priv)
 		// Read all the controller messages from the radio device.
 		size = hid_read(priv->radio_handle, buffer, FEATURE_BUFFER_SIZE);
 		if(size < 0){
-			LOGE("error reading from controllers");
+			if (priv->radio_read_errors++ == 0)
+				LOGE("error reading from controllers");
 			break;
-		} else if(size > 0) {
+		}
+		if (priv->radio_read_errors > 0) {
+			LOGI("Controller reads recovered after %d errors", priv->radio_read_errors);
+			priv->radio_read_errors = 0;
+		}
+		if(size > 0) {
 			if (buffer[0] == RIFT_RADIO_REPORT_ID) {
 				handle_rift_radio_report (priv, ts, buffer, size);
 				got_a_msg = true;
@@ -849,6 +874,8 @@ int rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out
 		return -1;
 
 	out->proximity = -1;
+	out->disconnected = dev_priv->hmd->read_errors >= RIFT_LOST_READ_ERRORS ||
+	                    dev_priv->hmd->radio_read_errors >= RIFT_LOST_READ_ERRORS;
 	if (dev_priv->id == 0) {
 		tracked_dev = dev_priv->hmd->tracked_dev;
 		out->host_time_ns = dev_priv->hmd->last_report_ts;
@@ -883,6 +910,16 @@ int rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out)
 	if (dev_priv->hmd->tracker_ctx)
 		rift_tracker_get_sensor_status(dev_priv->hmd->tracker_ctx, out);
 
+	return 0;
+}
+
+int rift_rescan_sensors(ohmd_device* device)
+{
+	rift_device_priv* dev_priv = rift_device_priv_get(device);
+
+	if (device->getf != getf || !dev_priv->hmd->tracker_ctx)
+		return -1;
+	rift_tracker_rescan_sensors(dev_priv->hmd->tracker_ctx);
 	return 0;
 }
 

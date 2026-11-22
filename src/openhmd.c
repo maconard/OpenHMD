@@ -685,6 +685,7 @@ int rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out
 int rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out);
 int rift_get_room_offset(ohmd_device* device, float applied[4], float stored[4]);
 int rift_set_room_offset(ohmd_device* device, const float stored[4]);
+int rift_rescan_sensors(ohmd_device* device);
 #endif
 
 int OHMD_APIENTRY ohmd_rift_get_tracking_status(ohmd_device* device, ohmd_rift_tracking_status* out)
@@ -702,6 +703,15 @@ int OHMD_APIENTRY ohmd_rift_get_sensor_status(ohmd_device* device, ohmd_rift_sen
 	memset(out, 0, sizeof(*out));
 #if DRIVER_OCULUS_RIFT
 	return rift_get_sensor_status(device, out);
+#else
+	return -1;
+#endif
+}
+
+int OHMD_APIENTRY ohmd_rift_rescan_sensors(ohmd_device* device)
+{
+#if DRIVER_OCULUS_RIFT
+	return rift_rescan_sensors(device);
 #else
 	return -1;
 #endif

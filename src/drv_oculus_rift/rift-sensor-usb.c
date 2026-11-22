@@ -209,6 +209,18 @@ fail:
 	return NULL;
 }
 
+libusb_device *rift_sensor_usb_get_device(rift_sensor_device *base_dev)
+{
+	rift_sensor_usb_device *dev = (rift_sensor_usb_device *)(base_dev);
+	return libusb_get_device(dev->usb_devh);
+}
+
+bool rift_sensor_usb_is_lost(rift_sensor_device *base_dev)
+{
+	rift_sensor_usb_device *dev = (rift_sensor_usb_device *)(base_dev);
+	return !dev->stream_started || (dev->uvc_stream.video_running && dev->uvc_stream.active_transfers <= 0);
+}
+
 static void frame_captured_cb(rift_sensor_uvc_stream *stream, ohmd_video_frame *vframe, void *cb_data)
 {
 	rift_sensor_device *base_dev = (rift_sensor_device *)(cb_data);

@@ -18,6 +18,7 @@
 #include "rift-sensor-pose-search.h"
 
 #include "rift-tracker.h"
+#include "rift-sensor-usb.h"
 
 #include "rift-sensor-blobwatch.h"
 
@@ -61,6 +62,8 @@ struct rift_sensor_ctx_s
 	rift_tracker_ctx *tracker;
 
 	rift_sensor_device *dev;
+	/* Copy of dev->calib that outlives a reopened device */
+	rift_sensor_camera_params calib;
 
 	rift_sensor_analysis_frame *frames;
 	ohmd_jpeg_decoder *jpeg_decoder;
@@ -91,6 +94,9 @@ struct rift_sensor_ctx_s
 	int shutdown;
 
 	bool long_analysis_busy;
+
+	/* Captured frames are dropped while the USB device is being replaced */
+	bool capture_paused;
 
 	bool pose_save_pending;
 	posef pose_save_pose;
@@ -219,6 +225,8 @@ static void frame_captured_cb(rift_sensor_device *dev, ohmd_video_frame *vframe,
 	assert(sensor);
 
 	ohmd_lock_mutex (sensor->sensor_lock);
+	if (sensor->capture_paused)
+		goto no_frame;
 	sensor->frames_captured++;
 
 	frame = POP_QUEUE(&sensor->capture_frame_q);
@@ -308,7 +316,7 @@ static void analyse_frame_fast(rift_sensor_ctx *sensor, rift_sensor_analysis_fra
 
 	if (ohmd_pw_video_stream_connected(sensor->debug_vid)) {
 		rift_debug_draw_frame (sensor->debug_frame, frame->bwobs, sensor->pf.cs, frame,
-			frame->n_devices, sensor->devices, &sensor->dev->calib, &sensor->pf.camera_pose);
+			frame->n_devices, sensor->devices, &sensor->calib, &sensor->pf.camera_pose);
 		ohmd_pw_video_stream_push (sensor->debug_vid, vframe->start_ts, sensor->debug_frame);
 	}
 }
@@ -363,7 +371,8 @@ rift_sensor_new(ohmd_context* ohmd_ctx, int id, const char *serial_no,
 	snprintf(stream_id,64,"openhmd-rift-sensor-%s", sensor_ctx->serial_no);
 	stream_id[63] = 0;
 
-	rift_sensor_camera_params *calib = &sensor_ctx->dev->calib;
+	sensor_ctx->calib = dev->calib;
+	rift_sensor_camera_params *calib = &sensor_ctx->calib;
 
 	sensor_ctx->bw = blobwatch_new(calib->is_cv1 ? BLOB_THRESHOLD_CV1 : BLOB_THRESHOLD_DK2);
 
@@ -653,12 +662,76 @@ static bool handle_found_pose (rift_sensor_ctx *sensor_ctx,
 	return ret;
 }
 
-void rift_sensor_get_status(rift_sensor_ctx *sensor, unsigned int *frames, bool *have_pose)
+void rift_sensor_get_status(rift_sensor_ctx *sensor, unsigned int *frames, bool *have_pose, bool *connected)
 {
 	ohmd_lock_mutex (sensor->sensor_lock);
 	*frames = sensor->frames_captured;
 	*have_pose = sensor->pf.have_camera_pose;
+	*connected = sensor->dev != NULL && !sensor->capture_paused;
 	ohmd_unlock_mutex (sensor->sensor_lock);
+}
+
+libusb_device *rift_sensor_get_usb_device(rift_sensor_ctx *sensor)
+{
+	libusb_device *usb_dev = NULL;
+
+	ohmd_lock_mutex (sensor->sensor_lock);
+	if (sensor->dev)
+		usb_dev = rift_sensor_usb_get_device(sensor->dev);
+	ohmd_unlock_mutex (sensor->sensor_lock);
+	return usb_dev;
+}
+
+bool rift_sensor_is_lost(rift_sensor_ctx *sensor)
+{
+	bool lost;
+
+	ohmd_lock_mutex (sensor->sensor_lock);
+	lost = sensor->dev == NULL || rift_sensor_usb_is_lost(sensor->dev);
+	ohmd_unlock_mutex (sensor->sensor_lock);
+	return lost;
+}
+
+bool rift_sensor_release_device(rift_sensor_ctx *sensor)
+{
+	rift_sensor_device *dev;
+	unsigned int idle;
+
+	ohmd_lock_mutex (sensor->sensor_lock);
+	sensor->capture_paused = true;
+	/* Frames still in analysis point into the stream's buffers, which stopping it frees */
+	idle = (sensor->capture_frame_q.tail + QUEUE_SIZE - sensor->capture_frame_q.head) % QUEUE_SIZE;
+	if (idle != NUM_CAPTURE_BUFFERS) {
+		ohmd_unlock_mutex (sensor->sensor_lock);
+		return false;
+	}
+	dev = sensor->dev;
+	sensor->dev = NULL;
+	ohmd_unlock_mutex (sensor->sensor_lock);
+
+	if (dev) {
+		rift_sensor_device_stop_video(dev);
+		rift_sensor_device_free(dev);
+	}
+	return true;
+}
+
+bool rift_sensor_attach_device(rift_sensor_ctx *sensor, rift_sensor_device *dev)
+{
+	ohmd_lock_mutex (sensor->sensor_lock);
+	assert (sensor->dev == NULL && sensor->capture_paused);
+	sensor->dev = dev;
+	ohmd_unlock_mutex (sensor->sensor_lock);
+
+	if (!rift_sensor_start(sensor)) {
+		rift_sensor_release_device(sensor);
+		return false;
+	}
+
+	ohmd_lock_mutex (sensor->sensor_lock);
+	sensor->capture_paused = false;
+	ohmd_unlock_mutex (sensor->sensor_lock);
+	return true;
 }
 
 const char *rift_sensor_serial_no (rift_sensor_ctx *sensor)

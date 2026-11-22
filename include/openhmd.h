@@ -535,6 +535,8 @@ typedef struct {
 	unsigned long long host_time_ns;
 	/** CV1 HMD: raw proximity sensor value, over 3 while worn; -1 for other devices. */
 	int proximity;
+	/** The headset's USB connection is gone (HID reads keep failing); close and reopen the devices. */
+	int disconnected;
 } ohmd_rift_tracking_status;
 
 /** Rift sensor (camera) state. */
@@ -546,6 +548,8 @@ typedef struct {
 		unsigned int frames;
 		/** The sensor has a camera pose in the room. */
 		int have_pose;
+		/** The sensor is streaming; 0 after it was unplugged, until it is back. */
+		int connected;
 	} sensors[OHMD_RIFT_MAX_SENSORS];
 } ohmd_rift_sensor_status;
 
@@ -562,6 +566,14 @@ OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_get_tracking_status(ohmd_device* de
  * @return 0 on success, -1 for devices from other drivers.
  **/
 OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_get_sensor_status(ohmd_device* device, ohmd_rift_sensor_status* out);
+
+/**
+ * Look for Rift sensors plugged in since the device was opened. Sensors that were unplugged and come
+ * back are reopened without this.
+ *
+ * @return 0 on success, -1 for devices without Rift tracking.
+ **/
+OHMD_APIENTRYDLL int OHMD_APIENTRY ohmd_rift_rescan_sensors(ohmd_device* device);
 
 /**
  * Get the room offset of the tracking space as x, y, z (m) and yaw (radians): the one applied since
